@@ -1,0 +1,12 @@
+conda create -n detectron2 anaconda python=3.6
+conda install pytorch torchvision torchaudio cudatoolkit=11.1 -c pytorch-lts -c nvidia
+git clone https://github.com/facebookresearch/detectron2/tree/v0.1.1
+cd detectron2/
+pip install -e .
+
+
+python tools/analyze_model.py --tasks parameter --config-file configs/Misc/mask_rcnn_R_50_FPN_1x_dconv_c3-c5.yaml
+
+export DETECTRON2_DATASETS=/home/rudedaisy/datasets/
+
+python tools/train_net.py --config-file configs/Misc/mask_rcnn_R_50_FPN_1x_dconv_c3-c5.yaml --extract MODEL.WEIGHTS ckpt/model_final_65c703.pkl

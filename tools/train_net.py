@@ -20,6 +20,8 @@ import logging
 import os
 from collections import OrderedDict
 import torch
+import numpy as np
+import os
 
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
@@ -39,6 +41,9 @@ from detectron2.evaluation import (
 )
 from detectron2.modeling import GeneralizedRCNNWithTTA
 
+layer_idx = 0
+extract_idx = 0
+log = None
 
 def build_evaluator(cfg, dataset_name, output_folder=None):
     """
@@ -131,6 +136,53 @@ def setup(args):
 def main(args):
     cfg = setup(args)
 
+    if args.extract:
+        model = Trainer.build_model(cfg)
+        DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
+            cfg.MODEL.WEIGHTS, resume=args.resume
+        )
+
+        global layer_idx
+        global extract_idx
+        global log
+
+        log = open(os.path.join(args.export_dir, "log"), "w")
+        
+        OFMs = []
+        def extract(module, input, output):
+            global layer_idx
+            global extract_idx
+            global log
+            a = output.detach().cpu().numpy()
+            #OFMs.append(a)
+            log.write(str(a.shape) + "\n")
+            np.save(os.path.join(args.export_dir, "OFM-" + str(extract_idx // layer_idx) + "-" + str(extract_idx % layer_idx) + ".npy"), a)
+            extract_idx += 1
+        f = open(args.export_dir + "model.csv", "w")
+        layer_idx = 0
+        for n, m in model.named_modules():
+            if isinstance(m, torch.nn.Conv2d) and ("conv2_offset" in n):
+                m.register_forward_hook(extract)
+                name = str(layer_idx)
+                tp = "conv"
+                stride = str(max(m.stride[0], m.stride[1]))
+                padding = str(max(m.padding[0], m.padding[1]))
+                f.write(n+"," + tp+"," + stride+"," + padding + ",\n")
+                layer_idx += 1
+        f.close()
+
+        #IFM = [{}]
+        #IFM[0]["image"] = torch.rand(3, 640, 480).cuda()
+        #model(IFM)
+        res = Trainer.test(cfg, model)
+        if cfg.TEST.AUG.ENABLED:
+            res.update(Trainer.test_with_TTA(cfg, model))
+        if comm.is_main_process():
+            verify_results(cfg, res)
+        
+        log.close()
+        return res
+    
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
@@ -158,7 +210,11 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = default_argument_parser().parse_args()
+    #args = default_argument_parser().parse_args()
+    parser = default_argument_parser()
+    parser.add_argument("--extract", action="store_true", help="extract weights and/or activations for analysis")
+    parser.add_argument("--export-dir", type=str, default="/home/rudedaisy/detectron2/export/", help="directory to export feature map and/or weight data for analysis")
+    args = parser.parse_args()
     print("Command Line Args:", args)
     launch(
         main,

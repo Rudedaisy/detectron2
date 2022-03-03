@@ -10,3 +10,9 @@ python tools/analyze_model.py --tasks parameter --config-file configs/Misc/mask_
 export DETECTRON2_DATASETS=/home/rudedaisy/datasets/
 
 python tools/train_net.py --config-file configs/Misc/mask_rcnn_R_50_FPN_1x_dconv_c3-c5.yaml --extract MODEL.WEIGHTS ckpt/model_final_65c703.pkl
+
+
+python tools/train_net.py --config-file configs/Misc/mask_rcnn_R_50_FPN_1x_dconv_c3-c5.yaml --eval-only MODEL.WEIGHTS ckpt/model_final_65c703.pkl
+
+python tools/train_net.py --config-file configs/Misc/mask_rcnn_R_50_FPN_1x_dconv_none.yaml MODEL.WEIGHTS ckpt/model_final_65c703.pkl SOLVER.MAX_ITER 256 SOLVER.IMS_PER_BATCH 2
+python tools/train_net.py --config-file configs/Misc/mask_rcnn_R_50_FPN_1x_dconv_c3-c5.yaml MODEL.WEIGHTS ckpt/model_final_65c703.pkl SOLVER.MAX_ITER 256 SOLVER.IMS_PER_BATCH 2

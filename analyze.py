@@ -287,7 +287,6 @@ def correlate_finegrain(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
             del correlate_matrix[key]
     del correlate_matrix['offset_sum']
     correlate_matrix.drop(['offset_sum', 'offset_mean', 'offset_std', 'offset_absmax'], inplace=True)
-    correlate_matrix = np.square(correlate_matrix)
     
     # Display results
     print(correlate_matrix)

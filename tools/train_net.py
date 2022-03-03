@@ -43,7 +43,8 @@ from detectron2.modeling import GeneralizedRCNNWithTTA
 
 layer_idx = 0
 extract_idx = 0
-log = None
+ifm_log = None
+ofm_log = None
 
 def build_evaluator(cfg, dataset_name, output_folder=None):
     """
@@ -144,19 +145,26 @@ def main(args):
 
         global layer_idx
         global extract_idx
-        global log
+        global ifm_log
+        global ofm_log
 
-        log = open(os.path.join(args.export_dir, "log"), "w")
-        
+        ifm_log = open(os.path.join(args.export_dir, "ifm_log"), "w")
+        ofm_log = open(os.path.join(args.export_dir, "ofm_log"), "w")
+
+        IFMs = []
         OFMs = []
         def extract(module, input, output):
             global layer_idx
             global extract_idx
-            global log
-            a = output.detach().cpu().numpy()
-            #OFMs.append(a)
-            log.write(str(a.shape) + "\n")
-            np.save(os.path.join(args.export_dir, "OFM-" + str(extract_idx // layer_idx) + "-" + str(extract_idx % layer_idx) + ".npy"), a)
+            global ifm_log
+            global ofm_log
+            ifm = input[0].detach().cpu().numpy()
+            ofm = output.detach().cpu().numpy()
+            #OFMs.append(ofm)
+            ifm_log.write(str(ifm.shape) + "\n")
+            ofm_log.write(str(ofm.shape) + "\n")
+            np.save(os.path.join(args.export_dir, "IFM-" + str(extract_idx // layer_idx) + "-" + str(extract_idx % layer_idx) + ".npy"), ifm)
+            np.save(os.path.join(args.export_dir, "OFM-" + str(extract_idx // layer_idx) + "-" + str(extract_idx % layer_idx) + ".npy"), ofm)
             extract_idx += 1
         f = open(args.export_dir + "model.csv", "w")
         layer_idx = 0
@@ -167,7 +175,14 @@ def main(args):
                 tp = "conv"
                 stride = str(max(m.stride[0], m.stride[1]))
                 padding = str(max(m.padding[0], m.padding[1]))
-                f.write(n+"," + tp+"," + stride+"," + padding + ",\n")
+                in_channels = str(m.in_channels)
+                out_channels = str(m.out_channels)
+                kernel_size = str(m.kernel_size)
+                dilation = str(max(m.dilation))
+                groups = str(m.groups)
+                f.write(n+"," + tp+"," + stride+"," + padding+"," + in_channels+"," + out_channels+"," + kernel_size[0]+"," + dilation+"," + groups + ",\n")
+                np.save(os.path.join(args.export_dir, "weight-" + str(layer_idx)), m.weight.detach().cpu().numpy())
+                
                 layer_idx += 1
         f.close()
 
@@ -179,8 +194,8 @@ def main(args):
             res.update(Trainer.test_with_TTA(cfg, model))
         if comm.is_main_process():
             verify_results(cfg, res)
-        
-        log.close()
+        ifm_log.close()
+        ofm_log.close()
         return res
     
     if args.eval_only:

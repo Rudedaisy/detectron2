@@ -156,7 +156,7 @@ def populate_finegrain_stat(ifm_data_unfold, wgt_data, ofm_data, ifm_stats, ifm_
     return ifm_stats, ifm_wgt_stats, ofm_stats
 
 # Parallelize with threads                                                                                                                                                                                                                                                     
-def _local_extract(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
+def _local_extract(img, layer, stride, pad, kdim):
     ifm_stats = {'sum':[],
                  'mean':[],
                  'std':[],
@@ -192,24 +192,18 @@ def _local_extract(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
     ofm_stats = {'sum':[],
                  'mean':[],
                  'std':[],
-                 'absmax':[],
-                 'density':[]}
-    for i in imgs:
-        for l in layers:
-            stride = strides[l]
-            pad = pads[l]
-            kdim = kdims[l]
-            ifm_data = np.load(os.path.join(PATH, "IFM-"+str(i)+"-"+str(l)+".npy"))
-            wgt_data = np.load(os.path.join(PATH, "weight-" + str(l) + ".npy"))
-            ofm_data = np.load(os.path.join(PATH, "OFM-"+str(i)+"-"+str(l)+".npy"))
-            #print(ifm_data.shape)
-            #print(ofm_data.shape)
-            
-            # unfold shape: batch_size, channels, h_windows, w_windows, kh, kw
-            ifm_data_unfold = np.array(F.pad(torch.tensor(ifm_data),(pad, pad, pad, pad, 0, 0, 0, 0)).unfold(2, kdim, stride).unfold(3, kdim, stride))
-            #print(ifm_data_unfold.shape)
-            
-            ifm_stats, ifm_wgt_stats, ofm_stats = populate_finegrain_stat(ifm_data_unfold, wgt_data, ofm_data, ifm_stats, ifm_wgt_stats, ofm_stats)
+                 'absmax':[]}
+    ifm_data = np.load(os.path.join(PATH, "IFM-"+str(img)+"-"+str(layer)+".npy"))
+    wgt_data = np.load(os.path.join(PATH, "weight-" + str(layer) + ".npy"))
+    ofm_data = np.load(os.path.join(PATH, "OFM-"+str(img)+"-"+str(layer)+".npy"))
+    #print(ifm_data.shape)
+    #print(ofm_data.shape)
+    
+    # unfold shape: batch_size, channels, h_windows, w_windows, kh, kw
+    ifm_data_unfold = np.array(F.pad(torch.tensor(ifm_data),(pad, pad, pad, pad, 0, 0, 0, 0)).unfold(2, kdim, stride).unfold(3, kdim, stride))
+    #print(ifm_data_unfold.shape)
+    
+    ifm_stats, ifm_wgt_stats, ofm_stats = populate_finegrain_stat(ifm_data_unfold, wgt_data, ofm_data, ifm_stats, ifm_wgt_stats, ofm_stats)
     return ifm_stats, ifm_wgt_stats, ofm_stats
 
 def correlate_finegrain(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
@@ -221,9 +215,24 @@ def correlate_finegrain(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
         pads_unroll = pads*len(imgs)
         kdims_unroll = kdims*len(imgs)
 
-        local_ifm_stats, local_ifm_wgt_stats, local_ofm_stats = p.starmap(_local_extract, [(imgs_unroll[i], layers_unroll[i], strides_unroll[i], pads_unroll[i], kdims_unroll[i]) for i in range(len(imgs)*len(layers))])
+        stats = p.starmap(_local_extract, [(imgs_unroll[i], layers_unroll[i], strides_unroll[i], pads_unroll[i], kdims_unroll[i]) for i in range(len(imgs)*len(layers))])
 
-    print(local_ifm_stats.shape)
+    # stats: process_mapped result, [ifm_stats, ifm_wgt_stats, ofm_stats], dictionary entries
+    ifm_stats = {}
+    ifm_wgt_stats = {}
+    ofm_stats = {}
+    for key in stats[0][0]:
+        ifm_stats[key] = []
+        for datapoints in range(len(stats)):
+            ifm_stats[key] += stats[datapoints][0][key]
+    for key in stats[0][1]:
+        ifm_wgt_stats[key] = []
+        for datapoints in range(len(stats)):
+            ifm_wgt_stats[key] += stats[datapoints][1][key]
+    for	key in stats[0][2]:
+        ofm_stats[key] = []
+        for datapoints in range(len(stats)):
+            ofm_stats[key] += stats[datapoints][2][key]
                 
     total_stats = {'ifm_sum':      ifm_stats['sum'],
                    'ifm_mean':     ifm_stats['mean'],
@@ -276,10 +285,14 @@ def correlate_finegrain(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
     for key in correlate_matrix:
         if not ("offset" in key):
             del correlate_matrix[key]
-
+    del correlate_matrix['offset_sum']
+    correlate_matrix.drop(['offset_sum', 'offset_mean', 'offset_std', 'offset_absmax'], inplace=True)
+    correlate_matrix = np.square(correlate_matrix)
+    
     # Display results
     print(correlate_matrix)
-    sn.heatmap(correlate_matrix, annot=True, cmap=sn.color_palette("vlag"))
+    sn.set(font_scale=0.7)
+    sn.heatmap(correlate_matrix, annot=True, cmap='vlag')
     plt.show()
             
 if __name__ == '__main__':
@@ -294,7 +307,7 @@ if __name__ == '__main__':
         layer_wise[l] = (range(SAMPLES), [l])
     single_image = ([0], range(num_layers))
     total = (range(SAMPLES), range(num_layers))
-    corr = (list(range(100)), list(range(num_layers)))
+    corr = (list(range(200,300)), list(range(num_layers)))
     
     inputs = [single, layer_wise, single_image, total, None, corr]
     print("**Running MODE {}**".format(MODE_DEFS[MODE]))

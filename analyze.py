@@ -13,13 +13,15 @@ import matplotlib.pyplot as plt
 PATH = "/home/rudedaisy/detectron2/export/"
 BINS = 100
 SAMPLES = 500
-MODE = 5
+MODE = 6
 MODE_DEFS = {0: 'single', 
              1: 'layer-wise',
              2: 'single_image',
              3: 'total',
              4: 'weights_only',
-             5: 'correlate_ifm_offset_finegrain'}
+             5: 'correlate_ifm_offset_finegrain',
+             6: 'reorder_channels_compute',
+             7: 'inter_channel_sparsity_pattern'}
 ifm_log = "ifm_log"
 f_model = "model.csv"
 
@@ -42,7 +44,7 @@ def get_strides_pads_kdims():
         if "conv2_offset" in line:
             stride = int(line.split(',')[2])
             pad = int(line.split(',')[3])
-            kdim = int(line.split(',')[6])
+            kdim = int(line.split(',')[7])
             strides.append(stride)
             pads.append(pad)
             kdims.append(kdim)
@@ -84,7 +86,7 @@ def summary(imgs=[], layers=[]):
         for l in layers:
             data = stat(os.path.join(PATH, "OFM-"+str(i)+"-"+str(l)+".npy"), data)
     
-    plt.hist(data, density=True, bins = BINS)
+    raw = plt.hist(data, density=True, bins = BINS)
     plt.ylabel('Probability')
     plt.xlabel('Offset')
     plt.show()
@@ -93,6 +95,7 @@ def summary(imgs=[], layers=[]):
     std = np.std(data)
     print("Mean", mean)
     print("STD", std)
+    print(raw)
 
 def populate_finegrain_stat(ifm_data_unfold, wgt_data, ofm_data, ifm_stats, ifm_wgt_stats, ofm_stats):
     # unfold shape: batch_size, channels, h_windows, w_windows, kh, kw
@@ -293,7 +296,78 @@ def correlate_finegrain(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
     sn.set(font_scale=0.7)
     sn.heatmap(correlate_matrix, annot=True, cmap='vlag')
     plt.show()
+
+def reorder_channels_compute():
+    LOCAL_MODE = 1 # 0 = ifm sparsity rate, 1 = greedy similar ifm, 2 - greedy similar weight
+
+    imgs = [0]
+    layers = range(13)
+
+    sort_indxs = []
+    for img in imgs:
+        for layer in layers:
+            ifm_data = np.load(os.path.join(PATH, "IFM-"+str(img)+"-"+str(layer)+".npy"))
+            ifm_data = ifm_data.squeeze()
+            C = ifm_data.shape[0]
+            H = ifm_data.shape[1]
+            W = ifm_data.shape[2]
+            ifm_data = ifm_data.reshape((ifm_data.shape[0], -1))
+            layerMask = ifm_data > 0
+            layerMask = np.transpose(layerMask)
+
+            if LOCAL_MODE == 0:
+                l0 = np.count_nonzero(layerMask, axis=0)
+                l0_sort_indxs = np.argsort(l0)
+                sort_indxs.append(l0_sort_indxs)
+            elif LOCAL_MODE == 1:
+                local_sort_indxs = [0]
+                for c in range(C-1):
+                    similarity_val = 0
+                    most_similar_idx = -1
+                    for c2 in range(C):
+                        if (not (c2 in local_sort_indxs)) and (c!=c2):
+                            sim = (H*W) - np.sum(np.logical_xor(layerMask[local_sort_indxs[c]], layerMask[c2]))
+                            if sim > similarity_val:
+                                most_similar_idx = c2
+                                similarity_val = sim
+                    local_sort_indxs.append(most_similar_idx)
+                sort_indxs.append(local_sort_indxs)
+            elif LOCAL_MODE == 2:
+                pass
+    np.save("sort_indxs.npy", sort_indxs, allow_pickle=True)
+
+def inter_channel_sparsity_pattern():
+    imgs = [1]
+    layers = range(13)
+
+    #sort_indxs = []
+    sort_indxs = np.load("sort_indxs.npy", allow_pickle=True)
+    
+    for img in imgs:
+        for layer in layers:
+            ifm_data = np.load(os.path.join(PATH, "IFM-"+str(img)+"-"+str(layer)+".npy"))
+            ifm_data = ifm_data.squeeze()
+            C = ifm_data.shape[0]
+            H = ifm_data.shape[1]
+            W = ifm_data.shape[2]
+            # Save first channel
+            c0 = ifm_data[0]
+            layerMask = c0 > 0
+            plt.imsave('imgs/' + "C0_Visualization_IFM-"+str(img)+"-"+str(layer) + '_' + str(C) + "C_" + str(H) + "H_" + str(W) + "W_" + '.png', layerMask)
             
+            # Save flattened image
+            ifm_data = ifm_data.reshape((ifm_data.shape[0], -1))
+            layerMask = ifm_data > 0
+            layerMask = np.transpose(layerMask)
+            #plt.imshow(layerMask)
+            #plt.show()
+            plt.imsave('imgs/' + "Flattened_IFM-"+str(img)+"-"+str(layer) + '_' + str(C) + "C_" + str(H) + "H_" + str(W) + "W_" + '.png', layerMask)
+
+            # Save reordered flattened image
+            layerMask = layerMask[:,sort_indxs[layer]]
+            plt.imsave('imgs/' + "Reordered_Flattened_IFM-"+str(img)+"-"+str(layer) + '_' + str(C) + "C_" + str(H) + "H_" + str(W) + "W_" + '.png', layerMask)
+
+    
 if __name__ == '__main__':
     num_layers = count_layers()
     strides, pads, kdims = get_strides_pads_kdims()
@@ -318,5 +392,9 @@ if __name__ == '__main__':
             summary(i[0], i[1])
     elif MODE == 5:
         correlate_finegrain(inputs[MODE][0], inputs[MODE][1], strides, pads, kdims)
+    elif MODE == 6:
+        reorder_channels_compute()
+    elif MODE == 7:
+        inter_channel_sparsity_pattern()
     else:
         summary(inputs[MODE][0], inputs[MODE][1])

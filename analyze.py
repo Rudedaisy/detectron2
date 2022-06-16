@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 PATH = "/home/rudedaisy/detectron2/export/"
 BINS = 100
 SAMPLES = 500
-MODE = 6
+MODE = 7
 MODE_DEFS = {0: 'single', 
              1: 'layer-wise',
              2: 'single_image',
@@ -298,7 +298,7 @@ def correlate_finegrain(imgs=[], layers=[], strides=[], pads=[], kdims=[]):
     plt.show()
 
 def reorder_channels_compute():
-    LOCAL_MODE = 1 # 0 = ifm sparsity rate, 1 = greedy similar ifm, 2 - greedy similar weight
+    LOCAL_MODE = 3 # 0 = ifm sparsity rate, 1 = greedy similar ifm (XNOR), 2 - greedy similar weight (cosine similarity), 3 - avg magnitude weight
 
     imgs = [0]
     layers = range(13)
@@ -314,6 +314,11 @@ def reorder_channels_compute():
             ifm_data = ifm_data.reshape((ifm_data.shape[0], -1))
             layerMask = ifm_data > 0
             layerMask = np.transpose(layerMask)
+
+            wgt_data = np.load(os.path.join(PATH, "deform-weight-" + str(layer) + ".npy"))
+            #print(wgt_data.shape)
+            K = wgt_data.shape[0]
+            wgt_data = wgt_data.reshape((K, -1)) # assuming filters are NOT pruned
 
             if LOCAL_MODE == 0:
                 l0 = np.count_nonzero(layerMask, axis=0)
@@ -333,15 +338,44 @@ def reorder_channels_compute():
                     local_sort_indxs.append(most_similar_idx)
                 sort_indxs.append(local_sort_indxs)
             elif LOCAL_MODE == 2:
-                pass
+                local_sort_indxs = [0]
+                for c in range(C-1):
+                    similarity_val = 0
+                    most_similar_idx = -1
+                    for c2 in range(C):
+                        if (not (c2 in local_sort_indxs)) and (c!=c2):
+                            sim = np.dot(wgt_data[local_sort_indxs[c]], wgt_data[c2]) / (np.linalg.norm(wgt_data[local_sort_indxs[c]]) * np.linalg.norm(wgt_data[c2]))
+                            if sim > similarity_val:
+                                most_similar_idx = c2
+                                similarity_val = sim
+                    local_sort_indxs.append(most_similar_idx)
+                sort_indxs.append(local_sort_indxs)
+            elif LOCAL_MODE == 3: # bad results!
+                means = np.mean(np.absolute(wgt_data), axis=1)
+                means_sort_indxs = np.argsort(means)
+                sort_indxs.append(means_sort_indxs)
+                
     np.save("sort_indxs.npy", sort_indxs, allow_pickle=True)
 
 def inter_channel_sparsity_pattern():
-    imgs = [1]
+    imgs = [0]
     layers = range(13)
+    # Want to try both 16x4 and 32x32
+    rows = 16
+    cols = 4
 
-    #sort_indxs = []
+    def score(layerMask, rows, cols):
+        # compute the number of all-zero tiles and total number of tiles
+        data = layerMask.reshape((min(rows, layerMask.shape[0]), -1, cols))
+        tot = data.shape[1]
+        all_zeros = tot - sum(np.any(data, axis=(0,2)))
+        return all_zeros, tot
+    
     sort_indxs = np.load("sort_indxs.npy", allow_pickle=True)
+    base_tot = 0
+    base_zeros = 0
+    ro_tot = 0
+    ro_zeros = 0
     
     for img in imgs:
         for layer in layers:
@@ -359,14 +393,25 @@ def inter_channel_sparsity_pattern():
             ifm_data = ifm_data.reshape((ifm_data.shape[0], -1))
             layerMask = ifm_data > 0
             layerMask = np.transpose(layerMask)
+            local_base_zeros, local_base_tot = score(layerMask, rows, cols)
+            base_zeros += local_base_zeros
+            base_tot += local_base_tot
             #plt.imshow(layerMask)
             #plt.show()
             plt.imsave('imgs/' + "Flattened_IFM-"+str(img)+"-"+str(layer) + '_' + str(C) + "C_" + str(H) + "H_" + str(W) + "W_" + '.png', layerMask)
 
             # Save reordered flattened image
             layerMask = layerMask[:,sort_indxs[layer]]
+            local_ro_zeros, local_ro_tot = score(layerMask, rows, cols)
+            ro_zeros += local_ro_zeros
+            ro_tot +=	local_ro_tot
             plt.imsave('imgs/' + "Reordered_Flattened_IFM-"+str(img)+"-"+str(layer) + '_' + str(C) + "C_" + str(H) + "H_" + str(W) + "W_" + '.png', layerMask)
 
+    print(f"Computing sparsity scores of base and reordered IFMs assuming {rows}x{cols} tiles")
+    base_score = float(base_zeros) / base_tot
+    ro_score = float(ro_zeros) / ro_tot
+    print(f"\t Base: {base_zeros} / {base_tot} = {base_score}")
+    print(f"\t Reordered: {ro_zeros} / {ro_tot} = {ro_score}")
     
 if __name__ == '__main__':
     num_layers = count_layers()

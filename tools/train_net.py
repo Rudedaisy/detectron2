@@ -40,6 +40,7 @@ from detectron2.evaluation import (
     verify_results,
 )
 from detectron2.modeling import GeneralizedRCNNWithTTA
+from detectron2.layers.deform_conv import DeformConv
 
 layer_idx = 0
 extract_idx = 0
@@ -167,6 +168,7 @@ def main(args):
             np.save(os.path.join(args.export_dir, "OFM-" + str(extract_idx // layer_idx) + "-" + str(extract_idx % layer_idx) + ".npy"), ofm)
             extract_idx += 1
         f = open(args.export_dir + "model.csv", "w")
+        f.write('stride,padding,in_channels,out_channels,kernel_size,dilation,groups,\n')
         layer_idx = 0
         for n, m in model.named_modules():
             if isinstance(m, torch.nn.Conv2d) and ("conv2_offset" in n):
@@ -182,8 +184,10 @@ def main(args):
                 groups = str(m.groups)
                 f.write(n+"," + tp+"," + stride+"," + padding+"," + in_channels+"," + out_channels+"," + kernel_size[0]+"," + dilation+"," + groups + ",\n")
                 np.save(os.path.join(args.export_dir, "weight-" + str(layer_idx)), m.weight.detach().cpu().numpy())
-                
                 layer_idx += 1
+            elif isinstance(m, DeformConv):
+                np.save(os.path.join(args.export_dir, "deform-weight-" + str(layer_idx-1)), m.weight.detach().cpu().numpy())
+                
         f.close()
 
         #IFM = [{}]
